@@ -1,0 +1,196 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String   @id @default(cuid())
+  name            String
+  email           String   @unique
+  password        String
+  role            UserRole @default(STUDENT)
+
+  joinedDate      DateTime @default(now())
+  phone           String?
+  chapter         String?
+  city            String?
+  avatar          String?
+  
+  // Relations
+  createdEvents   Event[]  @relation("EventCreator")
+  signups         UserEventSignup[]
+  notifications   Notification[]
+  preferences     UserPreferences?
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Event {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  category    String
+  createdBy   String
+  isRecurring Boolean  @default(false)
+  status      EventStatus @default(DRAFT)
+  chapters    String[] // Array of chapter names
+  cities      String[] // Array of city names
+  tags        String[] // Array of tags
+  scheduledPublishDate DateTime?
+  
+  // Relations
+  creator     User     @relation("EventCreator", fields: [createdBy], references: [id])
+  instances   EventInstance[]
+  signups     UserEventSignup[]
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("events")
+}
+
+model EventInstance {
+  id              String   @id @default(cuid())
+  eventId         String
+  startDate       DateTime?
+  endDate         DateTime?
+  location        String?
+  hours           Float    @default(0)
+  studentCapacity Int      @default(0)
+  parentCapacity  Int      @default(0)
+  description     String?
+  enabled         Boolean  @default(true)
+  waitlistEnabled Boolean  @default(true)
+  
+  // Relations
+  event           Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  signups         UserEventSignup[]
+  notifications   Notification[]
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("event_instances")
+}
+
+model UserEventSignup {
+  id                String   @id @default(cuid())
+  userId            String
+  eventId           String
+  instanceId        String
+  signupDate        DateTime @default(now())
+  status            SignupStatus @default(CONFIRMED)
+  hoursEarned       Float?
+  attendance        AttendanceStatus?
+  waitlistNotifiedAt DateTime?
+  cancelledAt       DateTime?
+  
+  // Relations
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event        Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  instance     EventInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  
+  // Timestamps
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, instanceId])
+  @@map("user_event_signups")
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  userId      String
+  title       String
+  description String
+  type        NotificationType
+  isRead      Boolean  @default(false)
+  date        DateTime @default(now())
+  sessionId   String?  // Link to specific session (EventInstance)
+  
+  // Relations
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session     EventInstance? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("notifications")
+}
+
+model UserPreferences {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  eventReminders        Boolean  @default(true)
+  newEvents             Boolean  @default(true)
+  weeklyDigest          Boolean  @default(false)
+  emailNotifications    Boolean  @default(true)
+  textNotifications     Boolean  @default(true)
+  
+  // Relations
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Timestamps
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@map("user_preferences")
+}
+
+model PasswordReset {
+  id        String   @id @default(cuid())
+  email     String
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("password_resets")
+}
+
+enum UserRole {
+  STUDENT
+  PARENT
+  ADMIN
+}
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+  SCHEDULED
+}
+
+enum SignupStatus {
+  CONFIRMED
+  WAITLIST
+  WAITLIST_PENDING
+  CANCELLED
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  NOT_MARKED
+}
+
+enum NotificationType {
+  SUCCESS
+  INFO
+  WARNING
+  ERROR
+} 
