@@ -7,7 +7,7 @@ const router = express.Router();
 // Get user's notifications
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { page = 1, limit = 20, unreadOnly = false } = req.query;
+    const { page = 1, limit = 20, unreadOnly = false, search = '' } = req.query;
     const skip = (page - 1) * limit;
 
     const where = {
@@ -16,6 +16,24 @@ router.get('/', authenticateToken, async (req, res) => {
 
     if (unreadOnly === 'true') {
       where.isRead = false;
+    }
+
+    // Add search functionality
+    if (search && search.trim() !== '') {
+      where.OR = [
+        {
+          title: {
+            contains: search.trim(),
+            mode: 'insensitive'
+          }
+        },
+        {
+          description: {
+            contains: search.trim(),
+            mode: 'insensitive'
+          }
+        }
+      ];
     }
 
     const [notifications, total] = await Promise.all([
@@ -29,7 +47,8 @@ router.get('/', authenticateToken, async (req, res) => {
             include: {
               event: true
             }
-          }
+          },
+          event: true
         }
       }),
       prisma.notification.count({ where })

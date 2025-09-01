@@ -287,7 +287,7 @@ async function main() {
       instanceId: instance1.id,
       status: 'CONFIRMED',
       hoursEarned: 3,
-      attendance: 'PRESENT'
+      approval: 'APPROVED'
     }
   });
 
@@ -299,7 +299,7 @@ async function main() {
       instanceId: instance2.id,
       status: 'CONFIRMED',
       hoursEarned: 3,
-      attendance: 'PRESENT'
+      approval: 'APPROVED'
     }
   });
 

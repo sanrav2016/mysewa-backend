@@ -11,7 +11,7 @@ const calculateUserHours = async (userId) => {
     where: {
       userId: userId,
       status: 'CONFIRMED',
-      attendance: 'PRESENT',
+      approval: 'APPROVED',
       hoursEarned: { not: null }
     },
     _sum: {
@@ -28,7 +28,7 @@ const calculateUsersHours = async (userIds) => {
     where: {
       userId: { in: userIds },
       status: 'CONFIRMED',
-      attendance: 'PRESENT',
+      approval: 'APPROVED',
       hoursEarned: { not: null }
     },
     _sum: {

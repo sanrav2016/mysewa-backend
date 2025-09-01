@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
 import { prisma } from '../src/server.js';
-import { userLoginSchema, userRegistrationSchema } from '../validation/schemas.js';
+import { userLoginSchema, userRegistrationSchema, passwordChangeSchema } from '../validation/schemas.js';
 import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -26,7 +26,7 @@ const calculateUserHours = async (userId) => {
     where: {
       userId: userId,
       status: 'CONFIRMED',
-      attendance: 'PRESENT',
+      approval: 'APPROVED',
       hoursEarned: { not: null }
     },
     _sum: {
@@ -215,14 +215,16 @@ router.post('/logout', authenticateToken, (req, res) => {
 // Change password
 router.put('/change-password', authenticateToken, async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body;
-
-    if (!currentPassword || !newPassword) {
+    // Validate input
+    const { error, value } = passwordChangeSchema.validate(req.body);
+    if (error) {
       return res.status(400).json({
-        error: 'Missing required fields',
-        message: 'Current password and new password are required'
+        error: 'Validation Error',
+        details: error.details[0].message
       });
     }
+
+    const { currentPassword, newPassword } = value;
 
     // Get user with password
     const user = await prisma.user.findUnique({
@@ -243,9 +245,17 @@ router.put('/change-password', authenticateToken, async (req, res) => {
     // Verify current password
     const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
     if (!isCurrentPasswordValid) {
-      return res.status(401).json({
+      return res.status(400).json({
         error: 'Invalid current password',
         message: 'Current password is incorrect'
+      });
+    }
+
+    // Check if new password is different from current password
+    if (currentPassword === newPassword) {
+      return res.status(400).json({
+        error: 'Same password',
+        message: 'New password must be different from your current password'
       });
     }
 

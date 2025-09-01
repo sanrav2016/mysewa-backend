@@ -16,6 +16,11 @@ export const userLoginSchema = Joi.object({
   password: Joi.string().required()
 });
 
+export const passwordChangeSchema = Joi.object({
+  currentPassword: Joi.string().required(),
+  newPassword: Joi.string().min(6).required()
+});
+
 export const userUpdateSchema = Joi.object({
   name: Joi.string().min(2).max(100).optional(),
   email: Joi.string().email().optional(),
@@ -67,7 +72,8 @@ export const eventUpdateSchema = Joi.object({
     studentCapacity: Joi.number().integer().min(0).default(0),
     parentCapacity: Joi.number().integer().min(0).default(0),
     description: Joi.string().optional(),
-    enabled: Joi.boolean().default(true)
+    enabled: Joi.boolean().default(true),
+    waitlistEnabled: Joi.boolean().default(true)
   })).optional()
 });
 
@@ -81,7 +87,8 @@ export const eventInstanceCreateSchema = Joi.object({
   parentCapacity: Joi.number().integer().min(0).default(0),
   description: Joi.string().optional(),
   enabled: Joi.boolean().default(true),
-  waitlistEnabled: Joi.boolean().default(true)
+  waitlistEnabled: Joi.boolean().default(true),
+  scheduledPublishDate: Joi.date().iso().allow(null).optional()
 });
 
 export const eventInstanceUpdateSchema = Joi.object({
@@ -93,7 +100,13 @@ export const eventInstanceUpdateSchema = Joi.object({
   parentCapacity: Joi.number().integer().min(0).optional(),
   description: Joi.string().allow(null, '').optional(),
   enabled: Joi.boolean().optional(),
-  waitlistEnabled: Joi.boolean().optional()
+  waitlistEnabled: Joi.boolean().optional(),
+  scheduledPublishDate: Joi.date().iso().allow(null).optional()
+});
+
+export const sessionStatusUpdateSchema = Joi.object({
+  status: Joi.string().valid('ACTIVE', 'CANCELLED', 'COMPLETED', 'POSTPONED').required(),
+  reason: Joi.string().max(500).optional()
 });
 
 // Signup validation schemas
@@ -105,7 +118,8 @@ export const signupCreateSchema = Joi.object({
 export const signupUpdateSchema = Joi.object({
   status: Joi.string().valid('CONFIRMED', 'WAITLIST', 'WAITLIST_PENDING', 'CANCELLED').optional(),
   hoursEarned: Joi.number().min(0).optional(),
-  attendance: Joi.string().valid('PRESENT', 'ABSENT', 'NOT_MARKED').optional()
+  approval: Joi.string().valid('APPROVED', 'DENIED', 'NOT_MARKED').optional(),
+  comment: Joi.string().max(500).optional()
 });
 
 // Query validation schemas

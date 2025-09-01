@@ -1,8 +1,9 @@
 import express from 'express';
 import { prisma, eventScheduler, io } from '../src/server.js';
 import { authenticateToken, requireAdmin, requireStudentOrParentOrAdmin } from '../middleware/auth.js';
-import { eventCreateSchema, eventUpdateSchema, eventQuerySchema, eventInstanceCreateSchema, eventInstanceUpdateSchema } from '../validation/schemas.js';
+import { eventCreateSchema, eventUpdateSchema, eventQuerySchema, eventInstanceCreateSchema, eventInstanceUpdateSchema, sessionStatusUpdateSchema } from '../validation/schemas.js';
 import { localToUTC, utcToLocal } from '../utils/dateUtils.js';
+import { sendSessionCancellationEmail, sendSessionCompletionEmail } from '../services/emailService.js';
 
 const router = express.Router();
 
@@ -133,7 +134,21 @@ router.get('/', authenticateToken, async (req, res) => {
             },
             instances: {
               orderBy: { startDate: 'asc' },
-              include: {
+              select: {
+                id: true,
+                startDate: true,
+                endDate: true,
+                location: true,
+                hours: true,
+                studentCapacity: true,
+                parentCapacity: true,
+                description: true,
+                enabled: true,
+                waitlistEnabled: true,
+                status: true,
+                cancelledAt: true,
+                createdAt: true,
+                updatedAt: true,
                 signups: {
                   include: {
                     user: {
@@ -298,6 +313,17 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
           }
         },
         instances: true
+      }
+    });
+
+    // Create admin notification for event creation
+    await prisma.notification.create({
+      data: {
+        userId: req.user.id,
+        title: 'Event Created Successfully',
+        description: `Event "${event.title}" has been created successfully.`,
+        type: 'SUCCESS',
+        eventId: event.id
       }
     });
 
@@ -517,6 +543,45 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
       eventScheduler.scheduleEventPublish(updatedEvent);
     }
 
+    // Create admin notification for event update or publish
+    const isPublish = existingEvent.status !== 'PUBLISHED' && utcEventData.status === 'PUBLISHED';
+    const isScheduledPublish = existingEvent.status !== 'SCHEDULED' && utcEventData.status === 'SCHEDULED';
+    
+    if (isPublish) {
+      // Event is being published for the first time
+      await prisma.notification.create({
+        data: {
+          userId: req.user.id,
+          title: 'Event Published Successfully',
+          description: `"${updatedEvent.title}" has been published successfully! Category: ${updatedEvent.category}, Chapters: ${updatedEvent.chapters.join(', ')}, Cities: ${updatedEvent.cities.join(', ')}`,
+          type: 'SUCCESS',
+          eventId: updatedEvent.id
+        }
+      });
+    } else if (isScheduledPublish) {
+      // Event is being scheduled for publication
+      await prisma.notification.create({
+        data: {
+          userId: req.user.id,
+          title: 'Event Scheduled Successfully',
+          description: `"${updatedEvent.title}" has been scheduled for publication. Category: ${updatedEvent.category}, Chapters: ${updatedEvent.chapters.join(', ')}, Cities: ${updatedEvent.cities.join(', ')}`,
+          type: 'SUCCESS',
+          eventId: updatedEvent.id
+        }
+      });
+    } else {
+      // Regular update
+      await prisma.notification.create({
+        data: {
+          userId: req.user.id,
+          title: 'Event Updated Successfully',
+          description: `"${updatedEvent.title}" has been updated successfully.`,
+          type: 'SUCCESS',
+          eventId: updatedEvent.id
+        }
+      });
+    }
+
     res.json({
       message: 'Event updated successfully',
       event: updatedEvent
@@ -602,6 +667,7 @@ router.post('/:id/instances', authenticateToken, requireAdmin, async (req, res) 
       ...value,
       startDate: value.startDate ? localToUTC(value.startDate) : null,
       endDate: value.endDate ? localToUTC(value.endDate) : null,
+      scheduledPublishDate: value.scheduledPublishDate ? localToUTC(value.scheduledPublishDate) : null,
       eventId
     };
 
@@ -767,7 +833,8 @@ router.put('/instances/:instanceId', authenticateToken, requireAdmin, async (req
     const utcInstanceData = {
       ...value,
       startDate: value.startDate ? localToUTC(value.startDate) : null,
-      endDate: value.endDate ? localToUTC(value.endDate) : null
+      endDate: value.endDate ? localToUTC(value.endDate) : null,
+      scheduledPublishDate: value.scheduledPublishDate ? localToUTC(value.scheduledPublishDate) : null
     };
 
     // Use atomic transaction for the update
@@ -824,6 +891,30 @@ router.put('/instances/:instanceId', authenticateToken, requireAdmin, async (req
         }
       }
 
+      // If session is being closed (enabled: false), move WAITLIST_PENDING users back to WAITLIST
+      if (value.enabled === false && existingInstance.enabled === true) {
+        const waitlistPendingSignups = await tx.userEventSignup.findMany({
+          where: {
+            instanceId,
+            status: 'WAITLIST_PENDING'
+          }
+        });
+
+        for (const signup of waitlistPendingSignups) {
+          await tx.userEventSignup.update({
+            where: { id: signup.id },
+            data: { 
+              status: 'WAITLIST',
+              waitlistNotifiedAt: null // Clear the notification timestamp
+            }
+          });
+        }
+
+        if (waitlistPendingSignups.length > 0) {
+          console.log(`Moved ${waitlistPendingSignups.length} WAITLIST_PENDING user(s) back to WAITLIST for closed session ${instanceId}`);
+        }
+      }
+
       return updatedInstance;
     });
 
@@ -832,6 +923,18 @@ router.put('/instances/:instanceId', authenticateToken, requireAdmin, async (req
       type: 'instance-updated',
       instance: updatedInstance,
       sessionId: instanceId
+    });
+
+    // Create admin notification for session update
+    await prisma.notification.create({
+      data: {
+        userId: req.user.id,
+        title: 'Session Updated Successfully',
+        description: `Session "${updatedInstance.event.title}" has been updated successfully.`,
+        type: 'SUCCESS',
+        sessionId: updatedInstance.id,
+        eventId: updatedInstance.eventId
+      }
     });
 
     res.json({
@@ -844,6 +947,164 @@ router.put('/instances/:instanceId', authenticateToken, requireAdmin, async (req
     res.status(500).json({
       error: 'Failed to update event instance',
       message: 'An error occurred while updating the event instance'
+    });
+  }
+});
+
+// Update session status (admin only)
+router.patch('/instances/:instanceId/status', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { instanceId } = req.params;
+
+    // Validate input
+    const { error, value } = sessionStatusUpdateSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({
+        error: 'Validation Error',
+        details: error.details[0].message
+      });
+    }
+
+    // Check if instance exists
+    const existingInstance = await prisma.eventInstance.findUnique({
+      where: { id: instanceId },
+      include: {
+        event: {
+          select: {
+            id: true,
+            title: true
+          }
+        },
+        signups: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                role: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!existingInstance) {
+      return res.status(404).json({
+        error: 'Event instance not found',
+        message: 'The requested event instance does not exist'
+      });
+    }
+
+    // Update session status
+    const updateData = {
+      status: value.status
+    };
+
+    // If cancelling, add cancellation details
+    if (value.status === 'CANCELLED') {
+      updateData.cancelledAt = new Date();
+      updateData.cancelledBy = req.user.id;
+    }
+
+    const updatedInstance = await prisma.$transaction(async (tx) => {
+      // Update the session status
+      const updatedInstance = await tx.eventInstance.update({
+        where: { id: instanceId },
+        data: updateData,
+        include: {
+          event: {
+            select: {
+              id: true,
+              title: true
+            }
+          }
+        }
+      });
+
+      // If cancelling or closing, handle waitlist pending users and notify confirmed signups
+      if (value.status === 'CANCELLED' || value.status === 'COMPLETED') {
+        // Move all WAITLIST_PENDING users back to WAITLIST to prevent 12-hour expiry
+        const waitlistPendingSignups = existingInstance.signups.filter(signup => signup.status === 'WAITLIST_PENDING');
+        
+        for (const signup of waitlistPendingSignups) {
+          await tx.userEventSignup.update({
+            where: { id: signup.id },
+            data: { 
+              status: 'WAITLIST',
+              waitlistNotifiedAt: null // Clear the notification timestamp
+            }
+          });
+        }
+
+        // Notify all confirmed signups (except the admin who cancelled the session)
+        const confirmedSignups = existingInstance.signups.filter(signup => 
+          signup.status === 'CONFIRMED' && signup.userId !== req.user.id
+        );
+        
+        for (const signup of confirmedSignups) {
+          // Create notification for each confirmed user
+          await tx.notification.create({
+            data: {
+              userId: signup.userId,
+              title: value.status === 'CANCELLED' ? 'Session Cancelled' : 'Session Completed',
+              description: value.status === 'CANCELLED' 
+                ? `The session "${existingInstance.event.title}" has been cancelled by an administrator.${value.reason ? ` Reason: ${value.reason}` : ''}`
+                : `The session "${existingInstance.event.title}" has been marked as completed.`,
+              type: 'WARNING',
+              sessionId: instanceId
+            }
+          });
+
+          // Send email notification
+          if (value.status === 'CANCELLED') {
+            sendSessionCancellationEmail(signup.user, existingInstance, value.reason);
+          } else if (value.status === 'COMPLETED') {
+            sendSessionCompletionEmail(signup.user, existingInstance);
+          }
+
+          // Emit WebSocket event for the notification
+          io.to(`user-${signup.userId}`).emit('notification-created', {
+            type: 'notification-created',
+            notification: {
+              title: value.status === 'CANCELLED' ? 'Session Cancelled' : 'Session Completed',
+              description: value.status === 'CANCELLED' 
+                ? `The session "${existingInstance.event.title}" has been cancelled by an administrator.${value.reason ? ` Reason: ${value.reason}` : ''}`
+                : `The session "${existingInstance.event.title}" has been marked as completed.`,
+              type: 'WARNING'
+            }
+          });
+        }
+
+        // Emit WebSocket event for session status change
+        if (value.status === 'CANCELLED') {
+          io.to(`session-${instanceId}`).emit('session-cancelled', {
+            type: 'session-cancelled',
+            sessionId: instanceId,
+            reason: value.reason
+          });
+        } else {
+          io.to(`session-${instanceId}`).emit('session-completed', {
+            type: 'session-completed',
+            sessionId: instanceId
+          });
+        }
+      }
+
+      return updatedInstance;
+    });
+
+    res.json({
+      message: `Session ${value.status.toLowerCase()} successfully`,
+      instance: updatedInstance
+    });
+
+  } catch (error) {
+    console.error('Update session status error:', error);
+    res.status(500).json({
+      error: 'Failed to update session status',
+      message: 'An error occurred while updating the session status'
     });
   }
 });

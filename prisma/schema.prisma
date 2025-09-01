@@ -22,6 +22,7 @@ model User {
   
   // Relations
   createdEvents   Event[]  @relation("EventCreator")
+  cancelledSessions EventInstance[] @relation("SessionCancelledBy")
   signups         UserEventSignup[]
   notifications   Notification[]
   preferences     UserPreferences?
@@ -50,6 +51,7 @@ model Event {
   creator     User     @relation("EventCreator", fields: [createdBy], references: [id])
   instances   EventInstance[]
   signups     UserEventSignup[]
+  notifications Notification[]
   
   // Timestamps
   createdAt   DateTime @default(now())
@@ -70,9 +72,13 @@ model EventInstance {
   description     String?
   enabled         Boolean  @default(true)
   waitlistEnabled Boolean  @default(true)
+  status          SessionStatus @default(ACTIVE)
+  cancelledAt     DateTime?
+  cancelledBy     String?
   
   // Relations
   event           Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  cancelledByUser User?    @relation("SessionCancelledBy", fields: [cancelledBy], references: [id], onDelete: SetNull)
   signups         UserEventSignup[]
   notifications   Notification[]
   
@@ -91,7 +97,8 @@ model UserEventSignup {
   signupDate        DateTime @default(now())
   status            SignupStatus @default(CONFIRMED)
   hoursEarned       Float?
-  attendance        AttendanceStatus?
+  approval          ApprovalStatus?
+  comment           String?  // Add comment field
   waitlistNotifiedAt DateTime?
   cancelledAt       DateTime?
   
@@ -117,10 +124,12 @@ model Notification {
   isRead      Boolean  @default(false)
   date        DateTime @default(now())
   sessionId   String?  // Link to specific session (EventInstance)
+  eventId     String?  // Link to specific event (Event)
   
   // Relations
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   session     EventInstance? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  event       Event?   @relation(fields: [eventId], references: [id], onDelete: SetNull)
   
   // Timestamps
   createdAt   DateTime @default(now())
@@ -182,9 +191,9 @@ enum SignupStatus {
   CANCELLED
 }
 
-enum AttendanceStatus {
-  PRESENT
-  ABSENT
+enum ApprovalStatus {
+  APPROVED
+  DENIED
   NOT_MARKED
 }
 
@@ -193,4 +202,11 @@ enum NotificationType {
   INFO
   WARNING
   ERROR
+}
+
+enum SessionStatus {
+  ACTIVE
+  CANCELLED
+  COMPLETED
+  POSTPONED
 } 

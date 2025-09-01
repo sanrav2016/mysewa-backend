@@ -126,7 +126,9 @@ router.get('/', authenticateToken, requireStudentOrParentOrAdmin, async (req, re
               id: true,
               startDate: true,
               endDate: true,
-              location: true
+              location: true,
+              status: true,
+              cancelledAt: true
             }
           }
         },
@@ -184,7 +186,9 @@ router.get('/:id', authenticateToken, async (req, res) => {
             id: true,
             startDate: true,
             endDate: true,
-            location: true
+            location: true,
+            status: true,
+            cancelledAt: true
           }
         }
       }
@@ -278,6 +282,11 @@ router.post('/', authenticateToken, async (req, res) => {
           // Check if session is enabled
           if (!instance.enabled) {
             throw new Error('Session is not open for signups');
+          }
+
+          // Check if session is cancelled
+          if (instance.status === 'CANCELLED') {
+            throw new Error('Session has been cancelled');
           }
 
           // Check if user has any existing signup for this instance
@@ -556,7 +565,7 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
-// Update signup (admin only for attendance/hours, user can cancel)
+// Update signup (admin only for approval/hours, user can cancel)
 router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
@@ -647,7 +656,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
             id: true,
             startDate: true,
             endDate: true,
-            location: true
+            location: true,
+            status: true,
+            cancelledAt: true
           }
         }
       }
@@ -837,8 +848,8 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Bulk update attendance (admin only)
-router.patch('/bulk-attendance', authenticateToken, requireAdmin, async (req, res) => {
+// Bulk update approval (admin only)
+router.patch('/bulk-approval', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { signups } = req.body;
 
@@ -852,7 +863,7 @@ router.patch('/bulk-attendance', authenticateToken, requireAdmin, async (req, re
     // Use atomic transaction for all operations
     await prisma.$transaction(async (tx) => {
       for (const signupUpdate of signups) {
-        const { id, attendance, hoursEarned } = signupUpdate;
+        const { id, approval, hoursEarned } = signupUpdate;
 
         // Validate signup exists
         const existingSignup = await tx.userEventSignup.findUnique({
@@ -871,12 +882,12 @@ router.patch('/bulk-attendance', authenticateToken, requireAdmin, async (req, re
           continue; // Skip invalid signups
         }
 
-        // Check if attendance is being changed and create notification
-        const attendanceChanged = attendance && attendance !== existingSignup.attendance;
+        // Check if approval is being changed and create notification
+        const approvalChanged = approval && approval !== existingSignup.approval;
         
         // Prepare update data
         const updateData = {};
-        if (attendance) updateData.attendance = attendance;
+        if (approval) updateData.approval = approval;
         if (hoursEarned !== undefined) updateData.hoursEarned = hoursEarned;
 
         await tx.userEventSignup.update({
@@ -884,26 +895,22 @@ router.patch('/bulk-attendance', authenticateToken, requireAdmin, async (req, re
           data: updateData
         });
 
-        // Create notification for attendance changes
-        if (attendanceChanged) {
+        // Create notification for approval changes
+        if (approvalChanged) {
           let notificationTitle = '';
           let notificationDescription = '';
           let notificationType = 'INFO';
 
-          if (attendance === 'PRESENT') {
-            notificationTitle = 'Marked Present!';
+          if (approval === 'APPROVED') {
+            notificationTitle = 'Hours Approved!';
             notificationDescription = hoursEarned && hoursEarned > 0 
-              ? `You were marked present for "${existingSignup.event.title}" and awarded ${hoursEarned} volunteer hours!`
-              : `You were marked present for "${existingSignup.event.title}".`;
+              ? `Your hours for "${existingSignup.event.title}" have been approved and you've been awarded ${hoursEarned} volunteer hours!`
+              : `Your hours for "${existingSignup.event.title}" have been approved.`;
             notificationType = 'SUCCESS';
-          } else if (attendance === 'ABSENT') {
-            notificationTitle = 'Marked Absent';
-            notificationDescription = `You were marked absent for "${existingSignup.event.title}".`;
+          } else if (approval === 'DENIED') {
+            notificationTitle = 'Hours Denied';
+            notificationDescription = `Your hours for "${existingSignup.event.title}" have been denied.`;
             notificationType = 'WARNING';
-          } else if (attendance === 'NOT_MARKED') {
-            notificationTitle = 'Attendance Reset';
-            notificationDescription = `Your attendance for "${existingSignup.event.title}" has been reset.`;
-            notificationType = 'INFO';
           }
 
           const notification = await tx.notification.create({
@@ -926,15 +933,15 @@ router.patch('/bulk-attendance', authenticateToken, requireAdmin, async (req, re
     });
 
     res.json({
-      message: 'Attendance updated successfully',
+      message: 'Approval status updated successfully',
       updatedCount: signups.length
     });
 
   } catch (error) {
-    console.error('Bulk attendance update error:', error);
+    console.error('Bulk approval update error:', error);
     res.status(500).json({
-      error: 'Failed to update attendance',
-      message: 'An error occurred while updating attendance'
+      error: 'Failed to update approval status',
+      message: 'An error occurred while updating approval status'
     });
   }
 });
@@ -1014,7 +1021,7 @@ router.patch('/bulk-update-with-removals', authenticateToken, requireAdmin, asyn
 
       // Process updates
       for (const signupUpdate of updates) {
-        const { id, attendance, hoursEarned } = signupUpdate;
+        const { id, approval, hoursEarned, comment } = signupUpdate;
 
         const existingSignup = await tx.userEventSignup.findUnique({
           where: { id },
@@ -1028,13 +1035,14 @@ router.patch('/bulk-update-with-removals', authenticateToken, requireAdmin, asyn
         if (existingSignup) {
           sessionIds.add(existingSignup.instance.id);
           
-          // Check if attendance is being changed
-          const attendanceChanged = attendance && attendance !== existingSignup.attendance;
+          // Check if approval is being changed
+          const approvalChanged = approval && approval !== existingSignup.approval;
           
           // Prepare update data
           const updateData = {};
-          if (attendance) updateData.attendance = attendance;
+          if (approval) updateData.approval = approval;
           if (hoursEarned !== undefined) updateData.hoursEarned = hoursEarned;
+          if (comment !== undefined) updateData.comment = comment;
 
           const updatedSignup = await tx.userEventSignup.update({
             where: { id },
@@ -1048,29 +1056,25 @@ router.patch('/bulk-update-with-removals', authenticateToken, requireAdmin, asyn
 
           updatedSignups.push(updatedSignup);
 
-          // Create notification for attendance changes
-          if (attendanceChanged) {
+          // Create notification for approval changes
+          if (approvalChanged) {
             let notificationTitle = '';
             let notificationDescription = '';
             let notificationType = 'INFO';
 
-            if (attendance === 'PRESENT') {
-              notificationTitle = 'Marked Present!';
+            if (approval === 'APPROVED') {
+              notificationTitle = 'Hours Approved!';
               notificationDescription = hoursEarned && hoursEarned > 0 
-                ? `You were marked present for "${existingSignup.event.title}" and awarded ${hoursEarned} volunteer hours!`
-                : `You were marked present for "${existingSignup.event.title}".`;
+                ? `Your hours for "${existingSignup.event.title}" have been approved and you've been awarded ${hoursEarned} volunteer hours!`
+                : `Your hours for "${existingSignup.event.title}" have been approved.`;
               notificationType = 'SUCCESS';
-            } else if (attendance === 'ABSENT') {
-              notificationTitle = 'Marked Absent';
-              notificationDescription = `You were marked absent for "${existingSignup.event.title}".`;
+            } else if (approval === 'DENIED') {
+              notificationTitle = 'Hours Denied';
+              notificationDescription = `Your hours for "${existingSignup.event.title}" have been denied.`;
               notificationType = 'WARNING';
-            } else if (attendance === 'NOT_MARKED') {
-              notificationTitle = 'Attendance Reset';
-              notificationDescription = `Your attendance for "${existingSignup.event.title}" has been reset.`;
-              notificationType = 'INFO';
             }
 
-            const attendanceNotification = await tx.notification.create({
+            const approvalNotification = await tx.notification.create({
               data: {
                 userId: existingSignup.userId,
                 title: notificationTitle,
@@ -1083,7 +1087,7 @@ router.patch('/bulk-update-with-removals', authenticateToken, requireAdmin, asyn
             // Emit WebSocket event for the notification
             io.to(`user-${existingSignup.userId}`).emit('notification-created', {
               type: 'notification-created',
-              notification: attendanceNotification
+              notification: approvalNotification
             });
           }
         }
@@ -1140,7 +1144,7 @@ router.patch('/bulk-update-with-removals', authenticateToken, requireAdmin, asyn
   }
 });
 
-// Parent-managed bulk update (attendance and hours only, no removals)
+// Parent-managed bulk update (approval and hours only, no removals)
 router.patch('/parent-bulk-update/:sessionId', authenticateToken, requireParentConfirmedForSession, async (req, res) => {
   try {
     const { sessionId } = req.params;
@@ -1159,7 +1163,7 @@ router.patch('/parent-bulk-update/:sessionId', authenticateToken, requireParentC
 
       // Process updates only (no removals allowed for parents)
       for (const signupUpdate of updates) {
-        const { id, attendance, hoursEarned } = signupUpdate;
+        const { id, approval, hoursEarned, comment } = signupUpdate;
 
         const existingSignup = await tx.userEventSignup.findUnique({
           where: { id },
@@ -1171,13 +1175,14 @@ router.patch('/parent-bulk-update/:sessionId', authenticateToken, requireParentC
         });
 
         if (existingSignup && existingSignup.instance.id === sessionId) {
-          // Check if attendance is being changed
-          const attendanceChanged = attendance && attendance !== existingSignup.attendance;
-          
-          // Prepare update data (only attendance and hours allowed)
-          const updateData = {};
-          if (attendance) updateData.attendance = attendance;
-          if (hoursEarned !== undefined) updateData.hoursEarned = hoursEarned;
+                  // Check if approval is being changed (only admins can change approval)
+        const approvalChanged = req.user.role === 'ADMIN' && approval && approval !== existingSignup.approval;
+        
+        // Prepare update data (only hours for parents, both approval and hours for admins)
+        const updateData = {};
+        if (req.user.role === 'ADMIN' && approval) updateData.approval = approval;
+        if (hoursEarned !== undefined) updateData.hoursEarned = hoursEarned;
+        if (comment !== undefined) updateData.comment = comment;
 
           const updatedSignup = await tx.userEventSignup.update({
             where: { id },
@@ -1191,29 +1196,25 @@ router.patch('/parent-bulk-update/:sessionId', authenticateToken, requireParentC
 
           updatedSignups.push(updatedSignup);
 
-          // Create notification for attendance changes
-          if (attendanceChanged) {
+          // Create notification for approval changes
+          if (approvalChanged) {
             let notificationTitle = '';
             let notificationDescription = '';
             let notificationType = 'INFO';
 
-            if (attendance === 'PRESENT') {
-              notificationTitle = 'Marked Present!';
+            if (approval === 'APPROVED') {
+              notificationTitle = 'Hours Approved!';
               notificationDescription = hoursEarned && hoursEarned > 0 
-                ? `You were marked present for "${existingSignup.event.title}" and awarded ${hoursEarned} volunteer hours!`
-                : `You were marked present for "${existingSignup.event.title}".`;
+                ? `Your hours for "${existingSignup.event.title}" have been approved and you've been awarded ${hoursEarned} volunteer hours!`
+                : `Your hours for "${existingSignup.event.title}" have been approved.`;
               notificationType = 'SUCCESS';
-            } else if (attendance === 'ABSENT') {
-              notificationTitle = 'Marked Absent';
-              notificationDescription = `You were marked absent for "${existingSignup.event.title}".`;
+            } else if (approval === 'DENIED') {
+              notificationTitle = 'Hours Denied';
+              notificationDescription = `Your hours for "${existingSignup.event.title}" have been denied.`;
               notificationType = 'WARNING';
-            } else if (attendance === 'NOT_MARKED') {
-              notificationTitle = 'Attendance Reset';
-              notificationDescription = `Your attendance for "${existingSignup.event.title}" has been reset.`;
-              notificationType = 'INFO';
             }
 
-            const attendanceNotification = await tx.notification.create({
+            const approvalNotification = await tx.notification.create({
               data: {
                 userId: existingSignup.userId,
                 title: notificationTitle,
@@ -1226,7 +1227,7 @@ router.patch('/parent-bulk-update/:sessionId', authenticateToken, requireParentC
             // Emit WebSocket event for the notification
             io.to(`user-${existingSignup.userId}`).emit('notification-created', {
               type: 'notification-created',
-              notification: attendanceNotification
+              notification: approvalNotification
             });
           }
         }
@@ -1245,15 +1246,21 @@ router.patch('/parent-bulk-update/:sessionId', authenticateToken, requireParentC
     });
 
     res.json({
-      message: 'Attendance and hours updated successfully',
+      message: req.user.role === 'ADMIN' 
+        ? 'Approval status and hours updated successfully'
+        : 'Hours updated successfully',
       updatedCount: result.updatedSignups.length
     });
 
   } catch (error) {
     console.error('Parent bulk update error:', error);
     res.status(500).json({
-      error: 'Failed to update attendance and hours',
-      message: 'An error occurred while updating attendance and hours'
+      error: req.user.role === 'ADMIN' 
+        ? 'Failed to update approval status and hours'
+        : 'Failed to update hours',
+      message: req.user.role === 'ADMIN'
+        ? 'An error occurred while updating approval status and hours'
+        : 'An error occurred while updating hours'
     });
   }
 });
@@ -1319,7 +1326,9 @@ router.get('/check-conflicts/:instanceId', authenticateToken, async (req, res) =
             id: true,
             startDate: true,
             endDate: true,
-            location: true
+            location: true,
+            status: true,
+            cancelledAt: true
           }
         }
       }

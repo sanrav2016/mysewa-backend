@@ -12,7 +12,7 @@ const calculateUserHours = async (userId) => {
     where: {
       userId: userId,
       status: 'CONFIRMED',
-      attendance: 'PRESENT',
+      approval: 'APPROVED',
       hoursEarned: { not: null }
     },
     _sum: {
@@ -128,7 +128,9 @@ router.get('/upcoming-events', authenticateToken, async (req, res) => {
             startDate: true,
             endDate: true,
             location: true,
-            hours: true
+            hours: true,
+            status: true,
+            cancelledAt: true
           }
         }
       },
@@ -179,7 +181,9 @@ router.get('/recent-activity', authenticateToken, async (req, res) => {
             id: true,
             startDate: true,
             endDate: true,
-            location: true
+            location: true,
+            status: true,
+            cancelledAt: true
           }
         }
       },
@@ -246,11 +250,11 @@ router.get('/admin-stats', authenticateToken, async (req, res) => {
       }
     });
 
-    // Get total hours volunteered from confirmed signups marked present
+    // Get total hours volunteered from confirmed signups marked approved
     const totalHours = await prisma.userEventSignup.aggregate({
       where: {
         status: 'CONFIRMED',
-        attendance: 'PRESENT',
+        approval: 'APPROVED',
         hoursEarned: { not: null }
       },
       _sum: {
@@ -369,7 +373,7 @@ router.get('/export-chapter-data', authenticateToken, requireAdmin, async (req, 
       where: {
         userId: { in: userIds },
         status: 'CONFIRMED',
-        attendance: 'PRESENT',
+        approval: 'APPROVED',
         hoursEarned: { not: null }
       },
       _sum: {
@@ -516,7 +520,7 @@ router.get('/generate-certificate', authenticateToken, async (req, res) => {
       where: {
         userId: userId,
         status: 'CONFIRMED',
-        attendance: 'PRESENT',
+        approval: 'APPROVED',
         hoursEarned: { not: null }
       },
       include: {

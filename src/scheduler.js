@@ -116,39 +116,44 @@ class EventScheduler {
         try {
             const now = new Date();
             // Ensure all dates are in UTC
-            const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
+            // const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
             const oneDayFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-            const oneWeekFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+            // const oneWeekFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
-            // Get events starting in the next hour
-            const oneHourEvents = await prisma.eventInstance.findMany({
-                where: {
-                    startDate: {
-                        gte: now,
-                        lte: oneHourFromNow
-                    }
-                },
-                include: {
-                    event: true,
-                    signups: {
-                        include: {
-                            user: {
-                                include: {
-                                    preferences: true
-                                }
-                            }
-                        }
-                    }
-                }
-            });
+            // Get events starting in the next hour - COMMENTED OUT
+            // const oneHourEvents = await prisma.eventInstance.findMany({
+            //     where: {
+            //         startDate: {
+            //             gte: now,
+            //             lte: oneHourFromNow
+            //         },
+            //         enabled: true,
+            //         status: 'ACTIVE'
+            //     },
+            //     include: {
+            //         event: true,
+            //         signups: {
+            //             include: {
+            //                 user: {
+            //                     include: {
+            //                         preferences: true
+            //                     }
+            //                 }
+            //             }
+            //         }
+            //     }
+            // });
 
             // Get events starting in the next 24 hours
             const oneDayEvents = await prisma.eventInstance.findMany({
                 where: {
                     startDate: {
                         gte: now,
-                        lte: oneDayFromNow
-                    }
+                        lte: oneDayFromNow,
+                        not: null // Ensure startDate is not null
+                    },
+                    enabled: true,
+                    status: 'ACTIVE'
                 },
                 include: {
                     event: true,
@@ -164,49 +169,52 @@ class EventScheduler {
                 }
             });
 
-            // Get events starting in the next week
-            const oneWeekEvents = await prisma.eventInstance.findMany({
-                where: {
-                    startDate: {
-                        gte: now,
-                        lte: oneWeekFromNow
-                    }
-                },
-                include: {
-                    event: true,
-                    signups: {
-                        include: {
-                            user: {
-                                include: {
-                                    preferences: true
-                                }
-                            }
-                        }
-                    }
-                }
-            });
+            // Get events starting in the next week - COMMENTED OUT
+            // const oneWeekEvents = await prisma.eventInstance.findMany({
+            //     where: {
+            //         startDate: {
+            //             gte: now,
+            //             lte: oneWeekFromNow,
+            //             not: null // Ensure startDate is not null
+            //         },
+            //         enabled: true,
+            //         status: 'ACTIVE'
+            //     },
+            //     include: {
+            //         event: true,
+            //         signups: {
+            //             include: {
+            //                 user: {
+            //                     include: {
+            //                         preferences: true
+            //                     }
+            //                 }
+            //             }
+            //         }
+            //     }
+            // });
 
-            // Send 1-hour reminders (in-app notifications + emails)
-            for (const instance of oneHourEvents) {
-                await this.sendEventReminder(instance, '1 hour');
-            }
+            // Send 1-hour reminders (in-app notifications + emails) - COMMENTED OUT
+            // for (const instance of oneHourEvents) {
+            //     await this.sendEventReminder(instance, '1 hour');
+            // }
 
             // Send 1-day reminders (in-app notifications + emails)
             for (const instance of oneDayEvents) {
-                const oneHourInstance = oneHourEvents.find(i => i.id === instance.id);
-                if (!oneHourInstance) {
+                // const oneHourInstance = oneHourEvents.find(i => i.id === instance.id);
+                // if (!oneHourInstance) {
                     await this.sendEventReminder(instance, '24 hours');
-                }
+                // }
             }
 
-            // Send 1-week reminders (in-app notifications + emails)
-            for (const instance of oneWeekEvents) {
-                const oneDayInstance = oneDayEvents.find(i => i.id === instance.id);
-                const oneHourInstance = oneHourEvents.find(i => i.id === instance.id);
-                if (!oneDayInstance && !oneHourInstance) {
-                    await this.sendEventReminder(instance, '7 days');
-                }
-            }
+            // Send 1-week reminders (in-app notifications + emails) - COMMENTED OUT
+            // for (const instance of oneWeekEvents) {
+            //     const oneDayInstance = oneDayEvents.find(i => i.id === instance.id);
+            //     const oneHourInstance = oneHourEvents.find(i => i.id === instance.id);
+            //     if (!oneDayInstance && !oneHourInstance) {
+            //         await this.sendEventReminder(instance, '7 days');
+            //     }
+            // }
         } catch (error) {
             console.error('Error processing event reminders:', error);
         }
@@ -214,6 +222,12 @@ class EventScheduler {
 
     async sendEventReminder(instance, timeFrame) {
         try {
+            // Additional safety check: ensure session is still active, enabled, and has a datetime
+            if (!instance.enabled || instance.status !== 'ACTIVE' || !instance.startDate) {
+                console.log(`Skipping reminder for session ${instance.id}: not active, enabled, or missing datetime`);
+                return;
+            }
+
             // Check if we've already sent this reminder for this specific session
             const existingReminder = await prisma.notification.findFirst({
                 where: {
@@ -281,6 +295,7 @@ class EventScheduler {
             const sessionsToDisable = await prisma.eventInstance.findMany({
                 where: {
                     enabled: true,
+                    status: 'ACTIVE',
                     startDate: {
                         not: null,
                         lte: now
@@ -291,18 +306,21 @@ class EventScheduler {
                 }
             });
 
-            // Disable each session
+            // Disable each session and mark as completed
             for (const session of sessionsToDisable) {
                 await prisma.eventInstance.update({
                     where: { id: session.id },
-                    data: { enabled: false }
+                    data: { 
+                        enabled: false,
+                        status: 'COMPLETED'
+                    }
                 });
 
-                console.log(`Disabled session: ${session.event.title} (${session.id}) - start time passed`);
+                console.log(`Completed session: ${session.event.title} (${session.id}) - start time passed`);
             }
 
             if (sessionsToDisable.length > 0) {
-                console.log(`Disabled ${sessionsToDisable.length} sessions that have passed their start time`);
+                console.log(`Completed ${sessionsToDisable.length} sessions that have passed their start time`);
             }
         } catch (error) {
             console.error('Error processing session disabling:', error);
