@@ -73,6 +73,7 @@ model EventInstance {
   enabled         Boolean  @default(true)
   waitlistEnabled Boolean  @default(true)
   status          SessionStatus @default(ACTIVE)
+  scheduledPublishDate  DateTime?
   cancelledAt     DateTime?
   cancelledBy     String?
   

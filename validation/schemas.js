@@ -49,7 +49,9 @@ export const eventCreateSchema = Joi.object({
     studentCapacity: Joi.number().integer().min(0).default(0),
     parentCapacity: Joi.number().integer().min(0).default(0),
     description: Joi.string().optional(),
-    enabled: Joi.boolean().default(true)
+    enabled: Joi.boolean().default(true),
+    waitlistEnabled: Joi.boolean().default(true),
+    scheduledPublishDate: Joi.date().iso().allow(null).optional()
   })).optional()
 });
 
@@ -73,7 +75,8 @@ export const eventUpdateSchema = Joi.object({
     parentCapacity: Joi.number().integer().min(0).default(0),
     description: Joi.string().optional(),
     enabled: Joi.boolean().default(true),
-    waitlistEnabled: Joi.boolean().default(true)
+    waitlistEnabled: Joi.boolean().default(true),
+    scheduledPublishDate: Joi.date().iso().allow(null).optional()
   })).optional()
 });
 
